@@ -36,7 +36,7 @@ func main() {
 		serviceMapping := serviceMapping // Capture by value to avoid race condition
 
 		// Create unique hostname for each service
-		serviceHostname := fmt.Sprintf("%s-%s", serviceMapping.Name, config.Cfg.TSHostname)
+		serviceHostname := fmt.Sprintf("%s-%s", config.Cfg.TSHostname, serviceMapping.Name)
 		sanitizedHostname := util.SanitizeString(serviceHostname)
 
 		// Create unique directory for each service
