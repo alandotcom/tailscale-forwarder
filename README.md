@@ -30,13 +30,13 @@ This also solves for the issue that you can only run one Tailscale subnet router
 
 4. Get the service hostnames.
 
-   You should see multiple machines in the Tailscale [dashboard](https://login.tailscale.com/admin/machines) with the format `<Service Name>.<Base Hostname>`.
+   You should see multiple machines in the Tailscale [dashboard](https://login.tailscale.com/admin/machines) with the format `<Service Name>-<Base Hostname>` (dots in hostname are converted to hyphens).
    
    Each service gets its own descriptive hostname.
 
 5. Use the service-specific hostname to connect.
 
-   Example: `postgresql://postgres:<Postgres Password>@postgres.my-project-production.railway:5432/railway`
+   Example: `postgresql://postgres:<Postgres Password>@postgres-my-project-production-railway:5432/railway`
 
    Each service has a clear, descriptive hostname that tells you exactly what you're connecting to.
 
@@ -45,7 +45,7 @@ This also solves for the issue that you can only run one Tailscale subnet router
 | Environment Variable | Required | Default Value | Description |
 | -------------------- | :------: | ------------- | ----------- |
 | `TS_AUTHKEY`         | Yes      | -             | Tailscale auth key. |
-| `TS_HOSTNAME`        | Yes      | `${{RAILWAY_PROJECT_NAME}}-${{RAILWAY_ENVIRONMENT_NAME}}.railway` | Base hostname domain for services. |
+| `TS_HOSTNAME`        | Yes      | `${{RAILWAY_PROJECT_NAME}}-${{RAILWAY_ENVIRONMENT_NAME}}.railway` | Base hostname for services. Note: dots will be converted to hyphens in final hostname. |
 | `TS_EXTRA_ARGS`      | No       | -             | Additional Tailscale arguments (e.g., `--advertise-tags=tag:database,tag:production`). |
 | `SERVICE_[n]`        | Yes      | -             | Service mapping in format: `servicename:sourceport:targethost:targetport` |
 
@@ -60,9 +60,9 @@ SERVICE_03=api:80:${{WebServer.RAILWAY_PRIVATE_DOMAIN}}:${{WebServer.PORT}}
 ```
 
 **Resulting Connection URLs:**
-- PostgreSQL: `postgres.my-project-production.railway:5432`
-- Redis: `redis.my-project-production.railway:6379`
-- API: `api.my-project-production.railway:80`
+- PostgreSQL: `postgres-my-project-production-railway:5432`
+- Redis: `redis-my-project-production-railway:6379`
+- API: `api-my-project-production-railway:80`
 
 ## Examples
 
@@ -72,19 +72,19 @@ Each service gets its own descriptive hostname:
 ```bash
 SERVICE_01=postgres:5432:${{Postgres.RAILWAY_PRIVATE_DOMAIN}}:${{Postgres.PGPORT}}
 ```
-Connect with: `postgresql://postgres:<password>@postgres.my-project-production.railway:5432/railway`
+Connect with: `postgresql://postgres:<password>@postgres-my-project-production-railway:5432/railway`
 
 #### Redis
 ```bash
 SERVICE_02=redis:6379:${{Redis.RAILWAY_PRIVATE_DOMAIN}}:${{Redis.REDISPORT}}
 ```
-Connect with: `redis://default:<password>@redis.my-project-production.railway:6379`
+Connect with: `redis://default:<password>@redis-my-project-production-railway:6379`
 
 #### ClickHouse
 ```bash
 SERVICE_03=clickhouse:8123:${{ClickHouse.RAILWAY_PRIVATE_DOMAIN}}:${{ClickHouse.PORT}}
 ```
-Connect with: `http://clickhouse:<password>@clickhouse.my-project-production.railway:8123/railway`
+Connect with: `http://clickhouse:<password>@clickhouse-my-project-production-railway:8123/railway`
 
 #### Multiple Services
 ```bash
@@ -96,10 +96,10 @@ SERVICE_04=clickhouse:8123:${{ClickHouse.RAILWAY_PRIVATE_DOMAIN}}:${{ClickHouse.
 
 Then you can connect to each service using its descriptive hostname:
 
-- **PostgreSQL**: `postgresql://postgres:<password>@postgres.my-project-production.railway:5432/railway`
-- **Redis**: `redis://default:<password>@redis.my-project-production.railway:6379`
-- **API**: `http://api.my-project-production.railway:80`
-- **ClickHouse**: `http://clickhouse:<password>@clickhouse.my-project-production.railway:8123/railway`
+- **PostgreSQL**: `postgresql://postgres:<password>@postgres-my-project-production-railway:5432/railway`
+- **Redis**: `redis://default:<password>@redis-my-project-production-railway:6379`
+- **API**: `http://api-my-project-production-railway:80`
+- **ClickHouse**: `http://clickhouse:<password>@clickhouse-my-project-production-railway:8123/railway`
 
 Each service gets its own clear, descriptive hostname that immediately tells you what you're connecting to!
 
