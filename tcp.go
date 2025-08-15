@@ -1,44 +1,38 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"net"
-
-	"golang.org/x/sync/errgroup"
+	"time"
 )
 
-func fwdTCP(sourceConn net.Conn, targetAddr string, targetPort int) error {
-	defer sourceConn.Close()
-
-	targetConn, err := net.Dial("tcp", net.JoinHostPort(targetAddr, fmt.Sprintf("%d", targetPort)))
+func fwdTCP(ctx context.Context, sourceConn net.Conn, targetAddr string, targetPort int) error {
+	// Use context for dial timeout
+	dialer := &net.Dialer{
+		Timeout: 30 * time.Second,
+	}
+	targetConn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(targetAddr, fmt.Sprintf("%d", targetPort)))
 	if err != nil {
 		return fmt.Errorf("failed to dial target: %w", err)
 	}
-
 	defer targetConn.Close()
 
-	g := errgroup.Group{}
+	// Simple bidirectional copy - connections auto-close on context cancellation
+	go func() {
+		defer sourceConn.Close()
+		defer targetConn.Close()
+		io.Copy(targetConn, sourceConn)
+	}()
 
-	g.Go(func() error {
-		if _, err := io.Copy(targetConn, sourceConn); err != nil {
-			return fmt.Errorf("failed to copy data to target: %w", err)
-		}
+	go func() {
+		defer sourceConn.Close()
+		defer targetConn.Close()
+		io.Copy(sourceConn, targetConn)
+	}()
 
-		return nil
-	})
-
-	g.Go(func() error {
-		if _, err := io.Copy(sourceConn, targetConn); err != nil {
-			return fmt.Errorf("failed to copy data from source: %w", err)
-		}
-
-		return nil
-	})
-
-	if err := g.Wait(); err != nil {
-		return fmt.Errorf("connection error: %w", err)
-	}
-
+	// Wait for context cancellation
+	<-ctx.Done()
 	return nil
 }

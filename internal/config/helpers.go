@@ -33,21 +33,26 @@ func parseServiceMappingsFromEnv(prefix string) ([]ServiceMapping, error) {
 		if serviceName == "" {
 			return nil, fmt.Errorf("service name cannot be empty in mapping: %s", kv[1])
 		}
-
+		
 		sourcePort, err := strconv.Atoi(parts[1])
-		if err != nil {
-			return nil, fmt.Errorf("invalid source port: %s", parts[1])
+		if err != nil || sourcePort < 1 || sourcePort > 65535 {
+			return nil, fmt.Errorf("invalid source port: %s (must be 1-65535)", parts[1])
+		}
+
+		targetAddr := strings.TrimSpace(parts[2])
+		if targetAddr == "" {
+			return nil, fmt.Errorf("target address cannot be empty in mapping: %s", kv[1])
 		}
 
 		targetPort, err := strconv.Atoi(parts[3])
-		if err != nil {
-			return nil, fmt.Errorf("invalid target port: %s", parts[3])
+		if err != nil || targetPort < 1 || targetPort > 65535 {
+			return nil, fmt.Errorf("invalid target port: %s (must be 1-65535)", parts[3])
 		}
 
 		serviceMappings = append(serviceMappings, ServiceMapping{
 			Name:       serviceName,
 			SourcePort: sourcePort,
-			TargetAddr: parts[2],
+			TargetAddr: targetAddr,
 			TargetPort: targetPort,
 		})
 	}
@@ -76,32 +81,6 @@ func ParseExtraArgs(extraArgs string) []string {
 		return nil
 	}
 	
-	// Split by spaces, but handle quoted arguments
-	var args []string
-	var current strings.Builder
-	inQuote := false
-	
-	for _, char := range extraArgs {
-		switch char {
-		case '"':
-			inQuote = !inQuote
-		case ' ':
-			if inQuote {
-				current.WriteRune(char)
-			} else {
-				if current.Len() > 0 {
-					args = append(args, current.String())
-					current.Reset()
-				}
-			}
-		default:
-			current.WriteRune(char)
-		}
-	}
-	
-	if current.Len() > 0 {
-		args = append(args, current.String())
-	}
-	
-	return args
+	// Simple parsing for trusted internal input
+	return strings.Fields(extraArgs)
 }

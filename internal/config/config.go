@@ -44,6 +44,20 @@ func init() {
 
 	Cfg.TSHostname = sanitizedHostname
 
+	// Validate HTTPS configuration
+	if Cfg.TSEnableHTTPS && Cfg.TSStateDir == "" {
+		errs = append(errs, fmt.Errorf("TS_STATE_DIR is required when TS_ENABLE_HTTPS is true"))
+	}
+
+	if Cfg.TSStateDir != "" {
+		// Check if state directory exists and is writable
+		if _, err := os.Stat(Cfg.TSStateDir); os.IsNotExist(err) {
+			errs = append(errs, fmt.Errorf("TS_STATE_DIR directory does not exist: %s", Cfg.TSStateDir))
+		} else if err != nil {
+			errs = append(errs, fmt.Errorf("TS_STATE_DIR directory error: %w", err))
+		}
+	}
+
 	if len(errs) > 0 {
 		logger.StderrWithSource.Error("configuration error(s) found", logger.ErrorsAttr(errs...))
 		os.Exit(1)
