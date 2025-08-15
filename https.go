@@ -14,7 +14,6 @@ import (
 	"main/internal/logger"
 
 	"golang.org/x/sync/errgroup"
-	"tailscale.com/client/tailscale"
 	"tailscale.com/tsnet"
 )
 
@@ -60,8 +59,11 @@ func startHTTPSProxy(ctx context.Context, ts *tsnet.Server, serviceMapping confi
 		proxy.ServeHTTP(w, r)
 	})
 
-	// Configure TLS with automatic certificate provisioning
-	localClient := &tailscale.LocalClient{}
+	// Configure TLS with automatic certificate provisioning using tsnet's LocalClient
+	localClient, err := ts.LocalClient()
+	if err != nil {
+		return fmt.Errorf("failed to get LocalClient for %s: %w", serviceMapping.Name, err)
+	}
 	tlsConfig := &tls.Config{
 		GetCertificate: localClient.GetCertificate,
 	}

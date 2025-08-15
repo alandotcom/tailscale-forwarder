@@ -54,16 +54,8 @@ func main() {
 		serviceHostname := fmt.Sprintf("%s.%s", serviceMapping.Name, config.Cfg.TSHostname)
 		sanitizedHostname := util.SanitizeString(serviceHostname)
 
-		// Create unique directory for each service
-		var serviceDir string
-		if config.Cfg.TSStateDir != "" {
-			// Use persistent state directory
-			serviceDir = filepath.Join(config.Cfg.TSStateDir, serviceMapping.Name)
-		} else {
-			// Fallback to temporary directory for backward compatibility
-			baseDir := filepath.Join(os.TempDir(), "tailscale-forwarder")
-			serviceDir = filepath.Join(baseDir, serviceMapping.Name)
-		}
+		// Create unique persistent directory for each service
+		serviceDir := filepath.Join(config.Cfg.TSStateDir, serviceMapping.Name)
 
 		// Handle directory creation error
 		if err := os.MkdirAll(serviceDir, 0700); err != nil {

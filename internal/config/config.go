@@ -44,9 +44,9 @@ func init() {
 
 	Cfg.TSHostname = sanitizedHostname
 
-	// Validate HTTPS configuration
-	if Cfg.TSEnableHTTPS && Cfg.TSStateDir == "" {
-		errs = append(errs, fmt.Errorf("TS_STATE_DIR is required when TS_ENABLE_HTTPS is true"))
+	// Always require TS_STATE_DIR to prevent duplicate machines on restart
+	if Cfg.TSStateDir == "" {
+		errs = append(errs, fmt.Errorf("TS_STATE_DIR is required to prevent duplicate Tailscale machines on restart"))
 	}
 
 	if Cfg.TSStateDir != "" {
