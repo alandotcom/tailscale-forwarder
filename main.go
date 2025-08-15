@@ -66,6 +66,19 @@ func main() {
 				logger.Stdout.Info(fmt.Sprintf("[%s] %s", serviceMapping.Name, fmt.Sprintf(format, v...)))
 			},
 		}
+		
+		// Apply extra args if configured (via environment)
+		if config.Cfg.TSExtraArgs != "" {
+			extraArgs := config.ParseExtraArgs(config.Cfg.TSExtraArgs)
+			logger.Stdout.Info("applying extra tailscale args via environment",
+				slog.String("service", serviceMapping.Name),
+				slog.Any("args", extraArgs),
+			)
+			
+			// Set environment variable for this service's tsnet instance
+			// The tsnet package should read TS_EXTRA_ARGS from the environment
+			os.Setenv("TS_EXTRA_ARGS", config.Cfg.TSExtraArgs)
+		}
 
 		servers = append(servers, ts)
 

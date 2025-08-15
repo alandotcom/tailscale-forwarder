@@ -46,12 +46,14 @@ This also solves for the issue that you can only run one Tailscale subnet router
 | -------------------- | :------: | ------------- | ----------- |
 | `TS_AUTHKEY`         | Yes      | -             | Tailscale auth key. |
 | `TS_HOSTNAME`        | Yes      | `${{RAILWAY_PROJECT_NAME}}-${{RAILWAY_ENVIRONMENT_NAME}}.railway` | Base hostname domain for services. |
+| `TS_EXTRA_ARGS`      | No       | -             | Additional Tailscale arguments (e.g., `--advertise-tags=tag:database,tag:production`). |
 | `SERVICE_[n]`        | Yes      | -             | Service mapping in format: `servicename:sourceport:targethost:targetport` |
 
 **Example Configuration:**
 ```bash
 TS_AUTHKEY=tskey-auth-xxxxx
 TS_HOSTNAME=my-project-production.railway
+TS_EXTRA_ARGS=--advertise-tags=tag:database,tag:production
 SERVICE_01=postgres:5432:${{Postgres.RAILWAY_PRIVATE_DOMAIN}}:${{Postgres.PGPORT}}
 SERVICE_02=redis:6379:${{Redis.RAILWAY_PRIVATE_DOMAIN}}:${{Redis.REDISPORT}}
 SERVICE_03=api:80:${{WebServer.RAILWAY_PRIVATE_DOMAIN}}:${{WebServer.PORT}}
@@ -100,3 +102,27 @@ Then you can connect to each service using its descriptive hostname:
 - **ClickHouse**: `http://clickhouse:<password>@clickhouse.my-project-production.railway:8123/railway`
 
 Each service gets its own clear, descriptive hostname that immediately tells you what you're connecting to!
+
+## Tags and ACLs
+
+You can use Tailscale tags to organize your services and apply ACL policies. Tags help you:
+
+- **Group related services**: Tag all database services with `tag:database`
+- **Apply environment-specific rules**: Use `tag:production` or `tag:staging`  
+- **Control access**: Set up ACLs to allow specific users/devices to access tagged services
+- **Auto-approve routes**: Configure ACLs to automatically approve subnet routes for tagged nodes
+
+**Example tag configurations:**
+
+```bash
+# Tag all services as databases in production
+TS_EXTRA_ARGS=--advertise-tags=tag:database,tag:production
+
+# Tag services by type and environment  
+TS_EXTRA_ARGS=--advertise-tags=tag:cache,tag:staging
+
+# Multiple arguments supported
+TS_EXTRA_ARGS=--advertise-tags=tag:web,tag:frontend --accept-routes
+```
+
+**Note**: You must be listed as a "TagOwner" in your Tailscale ACL to apply tags. See [Tailscale ACL documentation](https://tailscale.com/kb/1337/acl-syntax) for more details.

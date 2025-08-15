@@ -70,3 +70,38 @@ func parseServiceMappingsFromEnv(prefix string) ([]ServiceMapping, error) {
 
 	return serviceMappings, nil
 }
+
+func ParseExtraArgs(extraArgs string) []string {
+	if extraArgs == "" {
+		return nil
+	}
+	
+	// Split by spaces, but handle quoted arguments
+	var args []string
+	var current strings.Builder
+	inQuote := false
+	
+	for _, char := range extraArgs {
+		switch char {
+		case '"':
+			inQuote = !inQuote
+		case ' ':
+			if inQuote {
+				current.WriteRune(char)
+			} else {
+				if current.Len() > 0 {
+					args = append(args, current.String())
+					current.Reset()
+				}
+			}
+		default:
+			current.WriteRune(char)
+		}
+	}
+	
+	if current.Len() > 0 {
+		args = append(args, current.String())
+	}
+	
+	return args
+}
