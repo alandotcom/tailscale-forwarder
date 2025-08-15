@@ -23,16 +23,18 @@ func init() {
 		}
 	}
 
-	connectionMappings, err := parseConnectionMappingsFromEnv("CONNECTION_MAPPING_")
+	// Parse service mappings
+	serviceMappings, err := parseServiceMappingsFromEnv("SERVICE_")
 	if err != nil {
 		errs = append(errs, err)
 	}
 
-	if len(connectionMappings) == 0 && err == nil {
-		errs = append(errs, fmt.Errorf("required environment variable \"CONNECTION_MAPPING_[n]\" is not set"))
+	// Require at least one service mapping
+	if len(serviceMappings) == 0 && err == nil {
+		errs = append(errs, fmt.Errorf("required environment variable \"SERVICE_[n]\" is not set"))
 	}
 
-	Cfg.ConnectionMappings = connectionMappings
+	Cfg.ServiceMappings = serviceMappings
 
 	sanitizedHostname := util.SanitizeString(Cfg.TSHostname)
 

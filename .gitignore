@@ -18,6 +18,9 @@
 go.work
 go.work.sum
 
+# Built binary
+main
+
 # env file
 .env
 

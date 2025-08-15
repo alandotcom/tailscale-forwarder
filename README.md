@@ -20,97 +20,83 @@ This also solves for the issue that you can only run one Tailscale subnet router
 
    Set the `TS_AUTHKEY` environment variable to the auth key you generated in step 1.
 
-   Set your first connection mapping, example:
+   Set your first service mapping, example:
 
-   `CONNECTION_MAPPING_01=5432:${{Postgres.RAILWAY_PRIVATE_DOMAIN}}:${{Postgres.PGPORT}}`
+   `SERVICE_01=postgres:5432:${{Postgres.RAILWAY_PRIVATE_DOMAIN}}:${{Postgres.PGPORT}}`
 
-   The format is `<Source Port>:<Target Host>:<Target Port>`.
+   The format is `<Service Name>:<Source Port>:<Target Host>:<Target Port>`.
 
-   Note: You can set multiple connection mappings by incrementing the `CONNECTION_MAPPING_` prefix.
+   Note: You can set multiple service mappings by incrementing the `SERVICE_` prefix.
 
-4. Get the machine's hostname.
+4. Get the service hostnames.
 
-   You should see a new machine in the Tailscale [dashboard](https://login.tailscale.com/admin/machines) with the format `<Project Name>-<Environment Name>-<Service Name>`.
+   You should see multiple machines in the Tailscale [dashboard](https://login.tailscale.com/admin/machines) with the format `<Service Name>-<Base Hostname>`.
    
-   Copy this hostname.
+   Each service gets its own descriptive hostname.
 
-5. Use the machine's hostname to connect to the service.
+5. Use the service-specific hostname to connect.
 
-   Example: `postgresql://postgres:<Postgres Password>@<Tailscale Forwarder Hostname>:<Source Port From Desired Connection Mapping>/railway`
+   Example: `postgresql://postgres:<Postgres Password>@postgres-my-project-production:5432/railway`
 
-   While that example is for a PostgreSQL connection string, you can use the same `<Tailscale Forwarder Hostname>:<Source Port From Desired Connection Mapping>` format to connect to any service that listens on a TCP port, that you have setup a connection mapping for.
+   Each service has a clear, descriptive hostname that tells you exactly what you're connecting to.
 
 ## Configuration
 
-| Environment Variable     | Required | Default Value                                                                       | Description                                |
-| ------------------------ | :------: | ----------------------------------------------------------------------------------- | ------------------------------------------ |
-| `TS_AUTHKEY`             | Yes      | -                                                                                   | Tailscale auth key.                        |
-| `TS_HOSTNAME`            | Yes      | `${{RAILWAY_PROJECT_NAME}}-${{RAILWAY_ENVIRONMENT_NAME}}-${{RAILWAY_SERVICE_NAME}}` | Hostname to use for the Tailscale machine. |
-| `CONNECTION_MAPPING_[n]` | Yes      | -                                                                                   | Connection mapping for a service.          |
+| Environment Variable | Required | Default Value | Description |
+| -------------------- | :------: | ------------- | ----------- |
+| `TS_AUTHKEY`         | Yes      | -             | Tailscale auth key. |
+| `TS_HOSTNAME`        | Yes      | `${{RAILWAY_PROJECT_NAME}}-${{RAILWAY_ENVIRONMENT_NAME}}-${{RAILWAY_SERVICE_NAME}}` | Base hostname for services. |
+| `SERVICE_[n]`        | Yes      | -             | Service mapping in format: `servicename:sourceport:targethost:targetport` |
+
+**Example Configuration:**
+```bash
+TS_AUTHKEY=tskey-auth-xxxxx
+TS_HOSTNAME=my-project-production
+SERVICE_01=postgres:5432:${{Postgres.RAILWAY_PRIVATE_DOMAIN}}:${{Postgres.PGPORT}}
+SERVICE_02=redis:6379:${{Redis.RAILWAY_PRIVATE_DOMAIN}}:${{Redis.REDISPORT}}
+SERVICE_03=api:80:${{WebServer.RAILWAY_PRIVATE_DOMAIN}}:${{WebServer.PORT}}
+```
+
+**Resulting Connection URLs:**
+- PostgreSQL: `postgres-my-project-production:5432`
+- Redis: `redis-my-project-production:6379`
+- API: `api-my-project-production:80`
 
 ## Examples
 
-For all these examples, lets assume that the Tailscale Forwarder machine is named `my-project-production-tailscale-forwarder`.
+Each service gets its own descriptive hostname:
+
+#### PostgreSQL
+```bash
+SERVICE_01=postgres:5432:${{Postgres.RAILWAY_PRIVATE_DOMAIN}}:${{Postgres.PGPORT}}
+```
+Connect with: `postgresql://postgres:<password>@postgres-my-project-production:5432/railway`
 
 #### Redis
-
-Set the connection mapping:
-
-```shell
-CONNECTION_MAPPING_01=6379:${{Redis.RAILWAY_PRIVATE_DOMAIN}}:${{Redis.REDISPORT}}
+```bash
+SERVICE_02=redis:6379:${{Redis.RAILWAY_PRIVATE_DOMAIN}}:${{Redis.REDISPORT}}
 ```
-
-If your Redis service is named anything other than `Redis`, you can change the namespace in the reference variable.
-
-Connect to Redis with:
-
-```shell
-redis://default:<password>@my-project-production-tailscale-forwarder:6379
-```
+Connect with: `redis://default:<password>@redis-my-project-production:6379`
 
 #### ClickHouse
-
-Set the connection mapping:
-
-```shell
-CONNECTION_MAPPING_01=8123:${{ClickHouse.RAILWAY_PRIVATE_DOMAIN}}:${{ClickHouse.PORT}}
+```bash
+SERVICE_03=clickhouse:8123:${{ClickHouse.RAILWAY_PRIVATE_DOMAIN}}:${{ClickHouse.PORT}}
 ```
-
-If your ClickHouse service is named anything other than `ClickHouse`, you can change the namespace in the reference variable.
-
-Connect to ClickHouse with:
-
-```shell
-http://clickhouse:<password>@my-project-production-tailscale-forwarder:8123/railway
-```
-
-#### A Web Server
-
-Set the connection mapping:
-
-```shell
-CONNECTION_MAPPING_01=80:${{Web Server.RAILWAY_PRIVATE_DOMAIN}}:${{Web Server.PORT}}
-```
-
-If your web server service is named anything other than `Web Server`, you can change the namespace in the reference variable.
-
-You may also need to add a `PORT` environment variable to the service, if it is not already set.
-
-Connect to the web server with:
-
-```shell
-http://my-project-production-tailscale-forwarder:80
-```
+Connect with: `http://clickhouse:<password>@clickhouse-my-project-production:8123/railway`
 
 #### Multiple Services
-
-Set the connection mappings:
-
-```shell
-CONNECTION_MAPPING_01=5432:${{Postgres.RAILWAY_PRIVATE_DOMAIN}}:${{Postgres.PGPORT}}
-CONNECTION_MAPPING_02=6379:${{Redis.RAILWAY_PRIVATE_DOMAIN}}:${{Redis.REDISPORT}}
-CONNECTION_MAPPING_03=8123:${{ClickHouse.RAILWAY_PRIVATE_DOMAIN}}:${{ClickHouse.PORT}}
-CONNECTION_MAPPING_04=80:${{Web Server.RAILWAY_PRIVATE_DOMAIN}}:${{Web Server.PORT}}
+```bash
+SERVICE_01=postgres:5432:${{Postgres.RAILWAY_PRIVATE_DOMAIN}}:${{Postgres.PGPORT}}
+SERVICE_02=redis:6379:${{Redis.RAILWAY_PRIVATE_DOMAIN}}:${{Redis.REDISPORT}}
+SERVICE_03=api:80:${{WebServer.RAILWAY_PRIVATE_DOMAIN}}:${{WebServer.PORT}}
+SERVICE_04=clickhouse:8123:${{ClickHouse.RAILWAY_PRIVATE_DOMAIN}}:${{ClickHouse.PORT}}
 ```
 
-Then you can connect to the services by substituting in the `my-project-production-tailscale-forwarder` hostname with the set source port from the connection mapping.
+Then you can connect to each service using its descriptive hostname:
+
+- **PostgreSQL**: `postgresql://postgres:<password>@postgres-my-project-production:5432/railway`
+- **Redis**: `redis://default:<password>@redis-my-project-production:6379`
+- **API**: `http://api-my-project-production:80`
+- **ClickHouse**: `http://clickhouse:<password>@clickhouse-my-project-production:8123/railway`
+
+Each service gets its own clear, descriptive hostname that immediately tells you what you're connecting to!

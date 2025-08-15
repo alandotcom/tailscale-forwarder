@@ -8,8 +8,8 @@ import (
 	"strings"
 )
 
-func parseConnectionMappingsFromEnv(prefix string) ([]connectionMapping, error) {
-	connectionMappings := []connectionMapping{}
+func parseServiceMappingsFromEnv(prefix string) ([]ServiceMapping, error) {
+	serviceMappings := []ServiceMapping{}
 
 	for _, envVar := range os.Environ() {
 		kv := strings.SplitN(envVar, "=", 2)
@@ -22,38 +22,51 @@ func parseConnectionMappingsFromEnv(prefix string) ([]connectionMapping, error) 
 			continue
 		}
 
-		parts := strings.SplitN(kv[1], ":", 3)
+		// Expected format: SERVICE_01=servicename:sourceport:targetaddr:targetport
+		parts := strings.SplitN(kv[1], ":", 4)
 
-		if len(parts) != 3 {
-			return nil, fmt.Errorf("invalid connection mapping: %s", kv[1])
+		if len(parts) != 4 {
+			return nil, fmt.Errorf("invalid service mapping format: %s (expected: servicename:sourceport:targetaddr:targetport)", kv[1])
 		}
 
-		sourcePort, err := strconv.Atoi(parts[0])
+		serviceName := strings.TrimSpace(parts[0])
+		if serviceName == "" {
+			return nil, fmt.Errorf("service name cannot be empty in mapping: %s", kv[1])
+		}
+
+		sourcePort, err := strconv.Atoi(parts[1])
 		if err != nil {
-			return nil, fmt.Errorf("invalid source port: %s", parts[0])
+			return nil, fmt.Errorf("invalid source port: %s", parts[1])
 		}
 
-		targetPort, err := strconv.Atoi(parts[2])
+		targetPort, err := strconv.Atoi(parts[3])
 		if err != nil {
-			return nil, fmt.Errorf("invalid target port: %s", parts[2])
+			return nil, fmt.Errorf("invalid target port: %s", parts[3])
 		}
 
-		connectionMappings = append(connectionMappings, connectionMapping{
+		serviceMappings = append(serviceMappings, ServiceMapping{
+			Name:       serviceName,
 			SourcePort: sourcePort,
-			TargetAddr: parts[1],
+			TargetAddr: parts[2],
 			TargetPort: targetPort,
 		})
 	}
 
+	// Check for duplicate service names and source ports
+	serviceNames := []string{}
 	sourcePorts := []int{}
 
-	for _, connectionMapping := range connectionMappings {
-		if slices.Contains(sourcePorts, connectionMapping.SourcePort) {
-			return nil, fmt.Errorf("duplicate source port %d found in connection mappings", connectionMapping.SourcePort)
+	for _, serviceMapping := range serviceMappings {
+		if slices.Contains(serviceNames, serviceMapping.Name) {
+			return nil, fmt.Errorf("duplicate service name %s found in service mappings", serviceMapping.Name)
+		}
+		if slices.Contains(sourcePorts, serviceMapping.SourcePort) {
+			return nil, fmt.Errorf("duplicate source port %d found in service mappings", serviceMapping.SourcePort)
 		}
 
-		sourcePorts = append(sourcePorts, connectionMapping.SourcePort)
+		serviceNames = append(serviceNames, serviceMapping.Name)
+		sourcePorts = append(sourcePorts, serviceMapping.SourcePort)
 	}
 
-	return connectionMappings, nil
+	return serviceMappings, nil
 }

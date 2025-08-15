@@ -11,7 +11,7 @@ import (
 func fwdTCP(sourceConn net.Conn, targetAddr string, targetPort int) error {
 	defer sourceConn.Close()
 
-	targetConn, err := net.Dial("tcp", fmt.Sprintf("%s:%d", targetAddr, targetPort))
+	targetConn, err := net.Dial("tcp", net.JoinHostPort(targetAddr, fmt.Sprintf("%d", targetPort)))
 	if err != nil {
 		return fmt.Errorf("failed to dial target: %w", err)
 	}
