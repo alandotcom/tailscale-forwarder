@@ -5,7 +5,7 @@ go 1.26.3
 require (
 	github.com/caarlos0/env/v10 v10.0.0
 	golang.org/x/sync v0.20.0
-	tailscale.com v1.98.2
+	tailscale.com v1.98.5
 )
 
 require (
