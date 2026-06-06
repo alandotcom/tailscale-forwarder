@@ -2,31 +2,53 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"sync"
 	"syscall"
+	"time"
 
-	"main/internal/config"
-	"main/internal/logger"
-	"main/internal/util"
+	"github.com/alandotcom/tailscale-forwarder/internal/config"
+	"github.com/alandotcom/tailscale-forwarder/internal/logger"
+	"github.com/alandotcom/tailscale-forwarder/internal/util"
 
 	"golang.org/x/sync/errgroup"
 	"tailscale.com/tsnet"
 )
 
+// shutdownGrace is how long a service waits for in-flight connections to finish
+// after it stops accepting new ones, before forcing them closed.
+const shutdownGrace = 30 * time.Second
+
 func main() {
+	cfg, err := config.Load()
+	if err != nil {
+		logger.StderrWithSource.Error("configuration error(s) found", logger.ErrAttr(err))
+		os.Exit(1)
+	}
+	logger.SetLevel(cfg.LogLevel)
+
+	if err := run(cfg); err != nil {
+		logger.Stderr.Error("service mapping failed", logger.ErrAttr(err))
+		os.Exit(1)
+	}
+	logger.Stdout.Info("application shutdown complete")
+}
+
+func run(cfg *config.Config) error {
 	logger.Stdout.Info("🚀 Starting tailscale_fwdr",
-		slog.Any("service-mappings", config.Cfg.ServiceMappings),
+		slog.Any("service-mappings", cfg.ServiceMappings),
 	)
 
-	// Create context for graceful shutdown
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	// Setup signal handling for graceful shutdown
+	// Translate SIGINT/SIGTERM into context cancellation for graceful shutdown.
 	go func() {
 		sigChan := make(chan os.Signal, 1)
 		signal.Notify(sigChan, os.Interrupt, syscall.SIGTERM)
@@ -37,104 +59,79 @@ func main() {
 		cancel()
 	}()
 
-	var servers []*tsnet.Server
-	defer func() {
-		for _, srv := range servers {
-			srv.Close()
-		}
-	}()
+	readiness := newReadiness(len(cfg.ServiceMappings))
+	if cfg.HealthAddr != "" {
+		go serveHealth(ctx, cfg.HealthAddr, readiness)
+	}
 
-	// Use context-aware errgroup
 	g, gCtx := errgroup.WithContext(ctx)
 
-	for _, serviceMapping := range config.Cfg.ServiceMappings {
-		serviceMapping := serviceMapping // Capture by value to avoid race condition
-
-		// Create unique hostname for each service
-		serviceHostname := fmt.Sprintf("%s.%s", serviceMapping.Name, config.Cfg.TSHostname)
-		sanitizedHostname := util.SanitizeString(serviceHostname)
-
-		// Create unique persistent directory for each service
-		serviceDir := filepath.Join(config.Cfg.TSStateDir, serviceMapping.Name)
-
-		// Handle directory creation error
+	for _, serviceMapping := range cfg.ServiceMappings {
+		// serviceName is the sanitized identifier used for both the state
+		// directory and the Tailscale hostname, so the two always agree.
+		serviceName := util.SanitizeString(serviceMapping.Name)
+		serviceDir := filepath.Join(cfg.TSStateDir, serviceName)
 		if err := os.MkdirAll(serviceDir, 0700); err != nil {
-			logger.Stderr.Error("failed to create service directory",
-				slog.String("service", serviceMapping.Name),
-				slog.String("dir", serviceDir),
-				logger.ErrAttr(err))
-			os.Exit(1)
+			return fmt.Errorf("failed to create service directory for %s (%s): %w", serviceMapping.Name, serviceDir, err)
 		}
 
 		ts := &tsnet.Server{
-			Hostname:     sanitizedHostname,
-			AuthKey:      config.Cfg.TSAuthKey,
+			Hostname:     serviceName + "-" + cfg.TSHostname,
+			AuthKey:      cfg.TSAuthKey,
 			RunWebClient: false,
 			Ephemeral:    true,
 			Dir:          serviceDir,
 			UserLogf: func(format string, v ...any) {
-				logger.Stdout.Info(fmt.Sprintf("[%s] %s", serviceMapping.Name, fmt.Sprintf(format, v...)))
+				logger.Stdout.Info(fmt.Sprintf(format, v...), slog.String("service", serviceMapping.Name))
 			},
 		}
 
-		// Apply extra args if configured (via environment)
-		if config.Cfg.TSExtraArgs != "" {
-			extraArgs := config.ParseExtraArgs(config.Cfg.TSExtraArgs)
-			logger.Stdout.Info("extra tailscale args configured",
-				slog.String("service", serviceMapping.Name),
-				slog.Any("args", extraArgs),
-			)
-			// Note: TS_EXTRA_ARGS should be set globally via environment variables
-			// before starting the application, not per-service to avoid race conditions
-		}
-
-		servers = append(servers, ts)
-
-		// Start each service in a separate goroutine
 		g.Go(func() error {
-			return runServiceMapping(ts, serviceMapping, gCtx)
+			return runServiceMapping(gCtx, ts, serviceMapping, cfg.TSEnableHTTPS, readiness)
 		})
 	}
 
-	if err := g.Wait(); err != nil && err != context.Canceled {
-		logger.Stderr.Error("service mapping failed", logger.ErrAttr(err))
-		os.Exit(1)
+	if err := g.Wait(); err != nil && !errors.Is(err, context.Canceled) {
+		return err
 	}
-
-	logger.Stdout.Info("application shutdown complete")
+	return nil
 }
 
-func runServiceMapping(ts *tsnet.Server, serviceMapping config.ServiceMapping, ctx context.Context) error {
+func runServiceMapping(ctx context.Context, ts *tsnet.Server, serviceMapping config.ServiceMapping, enableHTTPS bool, readiness *readiness) error {
+	// Each service owns its tsnet node and closes it when the goroutine exits.
+	defer ts.Close()
 
+	// Up connects the node to the tailnet and blocks until it is usable; it
+	// calls Start internally, so no separate Start call is needed.
 	if _, err := ts.Up(ctx); err != nil {
 		return fmt.Errorf("failed to connect %s to tailscale: %w", serviceMapping.Name, err)
 	}
 
-	if err := ts.Start(); err != nil {
-		return fmt.Errorf("failed to start tailscale network server for %s: %w", serviceMapping.Name, err)
-	}
+	// One errgroup owns both the HTTPS proxy (if enabled) and the TCP accept
+	// loop, so a failure in either cancels the other and is reported upward.
+	g, gCtx := errgroup.WithContext(ctx)
 
-	// Start HTTPS proxy if enabled
-	if err := startHTTPSProxy(ctx, ts, serviceMapping); err != nil {
-		return fmt.Errorf("failed to start HTTPS proxy for %s: %w", serviceMapping.Name, err)
-	}
-
+	// Open the TCP listener before registering any goroutines so a bind failure
+	// returns cleanly without leaving group goroutines unwaited. ts.Close (the
+	// deferred call above) tears down this listener on return.
 	listener, err := ts.Listen("tcp", fmt.Sprintf(":%d", serviceMapping.SourcePort))
 	if err != nil {
 		return fmt.Errorf("failed to start listener for %s on port %d: %w", serviceMapping.Name, serviceMapping.SourcePort, err)
 	}
 
-	// Setup graceful shutdown for TCP listener
-	go func() {
-		<-ctx.Done()
-		logger.Stdout.Info("shutting down TCP listener",
-			slog.String("service", serviceMapping.Name),
-			slog.Int("port", serviceMapping.SourcePort),
-		)
+	if enableHTTPS {
+		if err := startHTTPSProxy(g, gCtx, ts, serviceMapping); err != nil {
+			return fmt.Errorf("failed to start HTTPS proxy for %s: %w", serviceMapping.Name, err)
+		}
+	}
 
-		// Close listener to stop accepting new connections
-		listener.Close()
-	}()
+	g.Go(func() error {
+		return acceptLoop(gCtx, listener, serviceMapping)
+	})
+
+	if readiness != nil {
+		readiness.markReady()
+	}
 
 	logArgs := []any{
 		slog.String("service", serviceMapping.Name),
@@ -143,47 +140,93 @@ func runServiceMapping(ts *tsnet.Server, serviceMapping config.ServiceMapping, c
 		slog.String("target_addr", serviceMapping.TargetAddr),
 		slog.Int("target_port", serviceMapping.TargetPort),
 	}
-
-	if config.Cfg.TSEnableHTTPS {
+	if enableHTTPS {
 		logArgs = append(logArgs, slog.String("https_url", fmt.Sprintf("https://%s/", ts.Hostname)))
 	}
-
 	logger.Stdout.Info("service ready", logArgs...)
 
+	if err := g.Wait(); err != nil && !errors.Is(err, context.Canceled) {
+		return err
+	}
+	return nil
+}
+
+// acceptLoop accepts connections and forwards each in its own goroutine. On
+// shutdown it stops accepting, then gives in-flight connections up to
+// shutdownGrace to finish before forcing them closed.
+func acceptLoop(ctx context.Context, listener net.Listener, serviceMapping config.ServiceMapping) error {
+	// connCtx is cancelled only when we give up waiting for connections to
+	// drain; until then, in-flight forwards run to completion on their own.
+	connCtx, forceClose := context.WithCancel(context.Background())
+	defer forceClose()
+
+	// Close the listener on shutdown to unblock Accept and stop new connections.
+	go func() {
+		<-ctx.Done()
+		logger.Stdout.Info("shutting down TCP listener",
+			slog.String("service", serviceMapping.Name),
+			slog.Int("port", serviceMapping.SourcePort),
+		)
+		listener.Close()
+	}()
+
+	var wg sync.WaitGroup
 	for {
-		select {
-		case <-ctx.Done():
-			logger.Stdout.Info("TCP service shutting down",
+		sourceConn, err := listener.Accept()
+		if err != nil {
+			if ctx.Err() != nil {
+				break
+			}
+			logger.Stderr.Error("failed to accept connection",
 				slog.String("service", serviceMapping.Name),
+				slog.Int("source_port", serviceMapping.SourcePort),
+				logger.ErrAttr(err),
 			)
-			return ctx.Err()
-		default:
-			sourceConn, err := listener.Accept()
-			if err != nil {
-				// Check if error is due to context cancellation
-				if ctx.Err() != nil {
-					return ctx.Err()
-				}
-				logger.Stderr.Error("failed to accept connection",
+			continue
+		}
+
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			defer sourceConn.Close()
+			if err := fwdTCP(connCtx, sourceConn, serviceMapping.TargetAddr, serviceMapping.TargetPort); err != nil {
+				logger.Stderr.Error("failed to forward connection",
 					slog.String("service", serviceMapping.Name),
 					slog.Int("source_port", serviceMapping.SourcePort),
+					slog.String("target_addr", serviceMapping.TargetAddr),
+					slog.Int("target_port", serviceMapping.TargetPort),
 					logger.ErrAttr(err),
 				)
-				continue
 			}
+		}()
+	}
 
-			go func() {
-				defer sourceConn.Close()
-				if err := fwdTCP(ctx, sourceConn, serviceMapping.TargetAddr, serviceMapping.TargetPort); err != nil {
-					logger.Stderr.Error("failed to forward connection",
-						slog.String("service", serviceMapping.Name),
-						slog.Int("source_port", serviceMapping.SourcePort),
-						slog.String("target_addr", serviceMapping.TargetAddr),
-						slog.Int("target_port", serviceMapping.TargetPort),
-						logger.ErrAttr(err),
-					)
-				}
-			}()
-		}
+	// Graceful drain: wait for active connections, force them closed on timeout.
+	if drained := waitWithTimeout(&wg, shutdownGrace); !drained {
+		logger.Stdout.Info("drain timeout reached, forcing connections closed",
+			slog.String("service", serviceMapping.Name),
+		)
+		forceClose()
+		wg.Wait()
+	}
+
+	logger.Stdout.Info("TCP service shutting down",
+		slog.String("service", serviceMapping.Name),
+	)
+	return nil
+}
+
+// waitWithTimeout reports whether wg completed before the timeout elapsed.
+func waitWithTimeout(wg *sync.WaitGroup, timeout time.Duration) bool {
+	done := make(chan struct{})
+	go func() {
+		wg.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return true
+	case <-time.After(timeout):
+		return false
 	}
 }

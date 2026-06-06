@@ -2,85 +2,87 @@ package config
 
 import (
 	"fmt"
-	"os"
-	"slices"
 	"strconv"
 	"strings"
+
+	"github.com/alandotcom/tailscale-forwarder/internal/util"
 )
 
-func parseServiceMappingsFromEnv(prefix string) ([]ServiceMapping, error) {
+// parseServiceMappings parses SERVICE_[n] entries from a list of "KEY=VALUE"
+// environment strings (as returned by os.Environ). Entries whose key does not
+// start with prefix are ignored. Duplicate service names (compared after
+// sanitization, since that is what becomes the Tailscale hostname) and
+// duplicate source ports are rejected.
+func parseServiceMappings(environ []string, prefix string) ([]ServiceMapping, error) {
 	serviceMappings := []ServiceMapping{}
+	seenNames := map[string]struct{}{}
+	seenPorts := map[int]struct{}{}
 
-	for _, envVar := range os.Environ() {
+	for _, envVar := range environ {
 		kv := strings.SplitN(envVar, "=", 2)
-
 		if len(kv) != 2 {
 			continue
 		}
-
 		if !strings.HasPrefix(kv[0], prefix) {
 			continue
 		}
 
-		// Expected format: SERVICE_01=servicename:sourceport:targetaddr:targetport
-		parts := strings.SplitN(kv[1], ":", 4)
-
-		if len(parts) != 4 {
-			return nil, fmt.Errorf("invalid service mapping format: %s (expected: servicename:sourceport:targetaddr:targetport)", kv[1])
+		mapping, err := parseServiceMapping(kv[1])
+		if err != nil {
+			return nil, err
 		}
 
-		serviceName := strings.TrimSpace(parts[0])
-		if serviceName == "" {
-			return nil, fmt.Errorf("service name cannot be empty in mapping: %s", kv[1])
+		sanitizedName := util.SanitizeString(mapping.Name)
+		if _, dup := seenNames[sanitizedName]; dup {
+			return nil, fmt.Errorf("duplicate service name %q found in service mappings (names must be unique after sanitization)", mapping.Name)
 		}
-		
-		sourcePort, err := strconv.Atoi(parts[1])
-		if err != nil || sourcePort < 1 || sourcePort > 65535 {
-			return nil, fmt.Errorf("invalid source port: %s (must be 1-65535)", parts[1])
+		if _, dup := seenPorts[mapping.SourcePort]; dup {
+			return nil, fmt.Errorf("duplicate source port %d found in service mappings", mapping.SourcePort)
 		}
+		seenNames[sanitizedName] = struct{}{}
+		seenPorts[mapping.SourcePort] = struct{}{}
 
-		targetAddr := strings.TrimSpace(parts[2])
-		if targetAddr == "" {
-			return nil, fmt.Errorf("target address cannot be empty in mapping: %s", kv[1])
-		}
-
-		targetPort, err := strconv.Atoi(parts[3])
-		if err != nil || targetPort < 1 || targetPort > 65535 {
-			return nil, fmt.Errorf("invalid target port: %s (must be 1-65535)", parts[3])
-		}
-
-		serviceMappings = append(serviceMappings, ServiceMapping{
-			Name:       serviceName,
-			SourcePort: sourcePort,
-			TargetAddr: targetAddr,
-			TargetPort: targetPort,
-		})
-	}
-
-	// Check for duplicate service names and source ports
-	serviceNames := []string{}
-	sourcePorts := []int{}
-
-	for _, serviceMapping := range serviceMappings {
-		if slices.Contains(serviceNames, serviceMapping.Name) {
-			return nil, fmt.Errorf("duplicate service name %s found in service mappings", serviceMapping.Name)
-		}
-		if slices.Contains(sourcePorts, serviceMapping.SourcePort) {
-			return nil, fmt.Errorf("duplicate source port %d found in service mappings", serviceMapping.SourcePort)
-		}
-
-		serviceNames = append(serviceNames, serviceMapping.Name)
-		sourcePorts = append(sourcePorts, serviceMapping.SourcePort)
+		serviceMappings = append(serviceMappings, mapping)
 	}
 
 	return serviceMappings, nil
 }
 
-func ParseExtraArgs(extraArgs string) []string {
-	if extraArgs == "" {
-		return nil
+// parseServiceMapping parses and validates a single mapping value in the form
+// "servicename:sourceport:targetaddr:targetport".
+func parseServiceMapping(value string) (ServiceMapping, error) {
+	parts := strings.SplitN(value, ":", 4)
+	if len(parts) != 4 {
+		return ServiceMapping{}, fmt.Errorf("invalid service mapping format: %s (expected: servicename:sourceport:targetaddr:targetport)", value)
 	}
-	
-	// Simple parsing for trusted internal input
-	return strings.Fields(extraArgs)
+
+	name := strings.TrimSpace(parts[0])
+	if name == "" {
+		return ServiceMapping{}, fmt.Errorf("service name cannot be empty in mapping: %s", value)
+	}
+	if util.SanitizeString(name) == "" {
+		return ServiceMapping{}, fmt.Errorf("service name %q contains no usable hostname characters", name)
+	}
+
+	sourcePort, err := strconv.Atoi(parts[1])
+	if err != nil || sourcePort < 1 || sourcePort > 65535 {
+		return ServiceMapping{}, fmt.Errorf("invalid source port: %s (must be 1-65535)", parts[1])
+	}
+
+	targetAddr := strings.TrimSpace(parts[2])
+	if targetAddr == "" {
+		return ServiceMapping{}, fmt.Errorf("target address cannot be empty in mapping: %s", value)
+	}
+
+	targetPort, err := strconv.Atoi(parts[3])
+	if err != nil || targetPort < 1 || targetPort > 65535 {
+		return ServiceMapping{}, fmt.Errorf("invalid target port: %s (must be 1-65535)", parts[3])
+	}
+
+	return ServiceMapping{
+		Name:       name,
+		SourcePort: sourcePort,
+		TargetAddr: targetAddr,
+		TargetPort: targetPort,
+	}, nil
 }

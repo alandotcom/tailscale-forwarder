@@ -1,4 +1,4 @@
-module main
+module github.com/alandotcom/tailscale-forwarder
 
 go 1.26.4
 
