@@ -48,9 +48,10 @@ This also solves for the issue that you can only run one Tailscale subnet router
 | -------------------- | :------: | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
 | `TS_AUTHKEY`         |   Yes    | -                                                                 | Tailscale auth key.                                                                        |
 | `TS_HOSTNAME`        |   Yes    | `${{RAILWAY_PROJECT_NAME}}-${{RAILWAY_ENVIRONMENT_NAME}}.railway` | Base hostname for services. Note: dots will be converted to hyphens in final hostname.     |
-| `TS_EXTRA_ARGS`      |    No    | -                                                                 | Additional Tailscale arguments (e.g., `--advertise-tags=tag:database,tag:production`).     |
 | `TS_STATE_DIR`       |   Yes    | -                                                                 | Persistent storage directory. Required to prevent duplicate Tailscale machines on restart. |
 | `TS_ENABLE_HTTPS`    |    No    | `false`                                                           | Enable HTTPS proxy with automatic TLS certificates.                                        |
+| `LOG_LEVEL`          |    No    | `info`                                                            | Log verbosity: `debug`, `info`, `warn`, or `error`.                                        |
+| `HEALTH_ADDR`        |    No    | -                                                                 | If set (e.g. `:8080`), serves `/healthz` and `/readyz` probes on this address.             |
 | `SERVICE_[n]`        |   Yes    | -                                                                 | Service mapping in format: `servicename:sourceport:targethost:targetport`                  |
 
 **Example Configuration (TCP Only):**
@@ -59,7 +60,6 @@ This also solves for the issue that you can only run one Tailscale subnet router
 TS_AUTHKEY=tskey-auth-xxxxx
 TS_HOSTNAME=my-project-production.railway
 TS_STATE_DIR=/app/data
-TS_EXTRA_ARGS=--advertise-tags=tag:database,tag:production
 SERVICE_01=postgres:5432:${{Postgres.RAILWAY_PRIVATE_DOMAIN}}:${{Postgres.PGPORT}}
 SERVICE_02=redis:6379:${{Redis.RAILWAY_PRIVATE_DOMAIN}}:${{Redis.REDISPORT}}
 SERVICE_03=api:80:${{WebServer.RAILWAY_PRIVATE_DOMAIN}}:${{WebServer.PORT}}
@@ -72,7 +72,6 @@ TS_AUTHKEY=tskey-auth-xxxxx
 TS_HOSTNAME=my-project-production.railway
 TS_STATE_DIR=/app/data
 TS_ENABLE_HTTPS=true
-TS_EXTRA_ARGS=--advertise-tags=tag:web,tag:production
 SERVICE_01=bullboard:3000:${{Bullboard.RAILWAY_PRIVATE_DOMAIN}}:${{Bullboard.PORT}}
 SERVICE_02=api:8080:${{API.RAILWAY_PRIVATE_DOMAIN}}:${{API.PORT}}
 ```
@@ -202,20 +201,10 @@ You can use Tailscale tags to organize your services and apply ACL policies. Tag
 - **Group related services**: Tag all database services with `tag:database`
 - **Apply environment-specific rules**: Use `tag:production` or `tag:staging`
 - **Control access**: Set up ACLs to allow specific users/devices to access tagged services
-- **Auto-approve routes**: Configure ACLs to automatically approve subnet routes for tagged nodes
 
-**Example tag configurations:**
+Because every machine here is brought up from a reusable auth key, **tags are attached to the auth key, not to this app**. Assign the tags you want when you generate the key (Tailscale admin console → Settings → Keys → "Add tags"), and every machine this forwarder creates with that key inherits them. There is no per-service tag setting in the app itself.
 
-```bash
-# Tag all services as databases in production
-TS_EXTRA_ARGS=--advertise-tags=tag:database,tag:production
-
-# Tag services by type and environment
-TS_EXTRA_ARGS=--advertise-tags=tag:cache,tag:staging
-
-# Multiple arguments supported
-TS_EXTRA_ARGS=--advertise-tags=tag:web,tag:frontend --accept-routes
-```
+Authorization to reach a service is enforced entirely by your tailnet ACLs against those tags, so make sure the auth key's tags map to grants that only expose each service to the intended peers.
 
 **Note**: You must be listed as a "TagOwner" in your Tailscale ACL to apply tags. See [Tailscale ACL documentation](https://tailscale.com/kb/1337/acl-syntax) for more details.
 
