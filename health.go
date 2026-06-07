@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"sync/atomic"
@@ -66,7 +67,7 @@ func serveHealth(ctx context.Context, addr string, r *readiness) {
 	}()
 
 	logger.Stdout.Info("starting health server", slog.String("addr", addr))
-	if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		logger.Stderr.Error("health server failed", slog.String("addr", addr), logger.ErrAttr(err))
 	}
 }

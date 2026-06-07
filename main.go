@@ -34,7 +34,7 @@ func main() {
 	logger.SetLevel(cfg.LogLevel)
 
 	if err := run(cfg); err != nil {
-		logger.Stderr.Error("service mapping failed", logger.ErrAttr(err))
+		logger.Stderr.Error("fatal error", logger.ErrAttr(err))
 		os.Exit(1)
 	}
 	logger.Stdout.Info("application shutdown complete")
@@ -67,23 +67,9 @@ func run(cfg *config.Config) error {
 	g, gCtx := errgroup.WithContext(ctx)
 
 	for _, serviceMapping := range cfg.ServiceMappings {
-		// serviceName is the sanitized identifier used for both the state
-		// directory and the Tailscale hostname, so the two always agree.
-		serviceName := util.SanitizeString(serviceMapping.Name)
-		serviceDir := filepath.Join(cfg.TSStateDir, serviceName)
-		if err := os.MkdirAll(serviceDir, 0700); err != nil {
-			return fmt.Errorf("failed to create service directory for %s (%s): %w", serviceMapping.Name, serviceDir, err)
-		}
-
-		ts := &tsnet.Server{
-			Hostname:     serviceName + "-" + cfg.TSHostname,
-			AuthKey:      cfg.TSAuthKey,
-			RunWebClient: false,
-			Ephemeral:    true,
-			Dir:          serviceDir,
-			UserLogf: func(format string, v ...any) {
-				logger.Stdout.Info(fmt.Sprintf(format, v...), slog.String("service", serviceMapping.Name))
-			},
+		ts, err := newServiceServer(cfg, serviceMapping)
+		if err != nil {
+			return err
 		}
 
 		g.Go(func() error {
@@ -95,6 +81,29 @@ func run(cfg *config.Config) error {
 		return err
 	}
 	return nil
+}
+
+// newServiceServer builds the tsnet node for a service mapping. The sanitized
+// service name is used for both the persistent state directory and the
+// Tailscale hostname so the two always agree; the state directory is created
+// before the node is returned.
+func newServiceServer(cfg *config.Config, serviceMapping config.ServiceMapping) (*tsnet.Server, error) {
+	serviceName := util.SanitizeHostname(serviceMapping.Name)
+	serviceDir := filepath.Join(cfg.TSStateDir, serviceName)
+	if err := os.MkdirAll(serviceDir, 0700); err != nil {
+		return nil, fmt.Errorf("failed to create service directory for %s (%s): %w", serviceMapping.Name, serviceDir, err)
+	}
+
+	return &tsnet.Server{
+		Hostname:     serviceName + "-" + cfg.TSHostname,
+		AuthKey:      cfg.TSAuthKey,
+		RunWebClient: false,
+		Ephemeral:    true,
+		Dir:          serviceDir,
+		UserLogf: func(format string, v ...any) {
+			logger.Stdout.Info(fmt.Sprintf(format, v...), slog.String("service", serviceMapping.Name))
+		},
+	}, nil
 }
 
 func runServiceMapping(ctx context.Context, ts *tsnet.Server, serviceMapping config.ServiceMapping, enableHTTPS bool, readiness *readiness) error {
@@ -129,9 +138,8 @@ func runServiceMapping(ctx context.Context, ts *tsnet.Server, serviceMapping con
 		return acceptLoop(gCtx, listener, serviceMapping)
 	})
 
-	if readiness != nil {
-		readiness.markReady()
-	}
+	// The listener is bound; the service is ready to serve.
+	readiness.markReady()
 
 	logArgs := []any{
 		slog.String("service", serviceMapping.Name),

@@ -35,7 +35,7 @@ func Load() (*Config, error) {
 	}
 	cfg.ServiceMappings = mappings
 
-	sanitizedHostname := util.SanitizeString(cfg.TSHostname)
+	sanitizedHostname := util.SanitizeHostname(cfg.TSHostname)
 	if sanitizedHostname == "" {
 		errs = append(errs, fmt.Errorf("TS_HOSTNAME must be a valid hostname, before sanitization: %q, after sanitization: %q", cfg.TSHostname, sanitizedHostname))
 	}

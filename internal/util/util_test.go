@@ -2,7 +2,7 @@ package util
 
 import "testing"
 
-func TestSanitizeString(t *testing.T) {
+func TestSanitizeHostname(t *testing.T) {
 	tests := []struct {
 		name  string
 		input string
@@ -22,8 +22,8 @@ func TestSanitizeString(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := SanitizeString(tt.input); got != tt.want {
-				t.Errorf("SanitizeString(%q) = %q, want %q", tt.input, got, tt.want)
+			if got := SanitizeHostname(tt.input); got != tt.want {
+				t.Errorf("SanitizeHostname(%q) = %q, want %q", tt.input, got, tt.want)
 			}
 		})
 	}

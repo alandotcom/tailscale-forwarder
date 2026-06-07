@@ -32,7 +32,7 @@ func parseServiceMappings(environ []string, prefix string) ([]ServiceMapping, er
 			return nil, err
 		}
 
-		sanitizedName := util.SanitizeString(mapping.Name)
+		sanitizedName := util.SanitizeHostname(mapping.Name)
 		if _, dup := seenNames[sanitizedName]; dup {
 			return nil, fmt.Errorf("duplicate service name %q found in service mappings (names must be unique after sanitization)", mapping.Name)
 		}
@@ -60,7 +60,7 @@ func parseServiceMapping(value string) (ServiceMapping, error) {
 	if name == "" {
 		return ServiceMapping{}, fmt.Errorf("service name cannot be empty in mapping: %s", value)
 	}
-	if util.SanitizeString(name) == "" {
+	if util.SanitizeHostname(name) == "" {
 		return ServiceMapping{}, fmt.Errorf("service name %q contains no usable hostname characters", name)
 	}
 
