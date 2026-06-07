@@ -5,16 +5,8 @@ import (
 	"strings"
 )
 
+// ErrAttr returns a slog attribute carrying the (trimmed) error message under
+// the "err" key.
 func ErrAttr(err error) slog.Attr {
 	return slog.String("err", strings.TrimSpace(err.Error()))
-}
-
-func ErrorsAttr(errors ...error) slog.Attr {
-	stringErrors := []string{}
-
-	for _, err := range errors {
-		stringErrors = append(stringErrors, strings.TrimSpace(err.Error()))
-	}
-
-	return slog.Any("errors", stringErrors)
 }

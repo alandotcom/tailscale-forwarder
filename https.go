@@ -121,7 +121,7 @@ func startHTTPSProxy(g *errgroup.Group, ctx context.Context, ts *tsnet.Server, s
 		logger.Stdout.Info("shutting down HTTPS proxy servers",
 			slog.String("service", serviceMapping.Name),
 		)
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownGrace)
 		defer cancel()
 		if err := httpServer.Shutdown(shutdownCtx); err != nil {
 			logger.Stderr.Error("HTTP server shutdown failed",
