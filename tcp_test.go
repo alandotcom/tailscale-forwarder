@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// startEchoTarget starts a loopback TCP server that echoes one connection, and
+// startEchoTarget starts a loopback TCP server that echoes connections, and
 // returns its host and port.
 func startEchoTarget(t *testing.T) (string, int) {
 	t.Helper()
@@ -20,12 +20,16 @@ func startEchoTarget(t *testing.T) (string, int) {
 	t.Cleanup(func() { ln.Close() })
 
 	go func() {
-		conn, err := ln.Accept()
-		if err != nil {
-			return
+		for {
+			conn, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			go func() {
+				defer conn.Close()
+				io.Copy(conn, conn)
+			}()
 		}
-		defer conn.Close()
-		io.Copy(conn, conn)
 	}()
 
 	host, portStr, err := net.SplitHostPort(ln.Addr().String())

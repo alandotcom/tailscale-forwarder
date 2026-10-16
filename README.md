@@ -4,8 +4,6 @@ Tailscale Forwarder is a TCP proxy that allows you to connect through a Tailscal
 
 This allows you to connect to Railway services that are not accessible from the internet, for example, locking down access to your database to only those who are on your Tailscale network.
 
-This also solves for the issue that you can only run one Tailscale subnet router per Tailscale account.
-
 ## Usage
 
 1. Generate a Tailscale [auth key](https://tailscale.com/kb/1085/auth-keys).
@@ -47,12 +45,18 @@ This also solves for the issue that you can only run one Tailscale subnet router
 | Environment Variable | Required | Default Value                                                     | Description                                                                                |
 | -------------------- | :------: | ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------ |
 | `TS_AUTHKEY`         |   Yes    | -                                                                 | Tailscale auth key.                                                                        |
-| `TS_HOSTNAME`        |   Yes    | `${{RAILWAY_PROJECT_NAME}}-${{RAILWAY_ENVIRONMENT_NAME}}.railway` | Base hostname for services. Note: dots will be converted to hyphens in final hostname.     |
+| `TS_HOSTNAME`        |   Yes    | - | Base hostname for services. Dots are converted to hyphens. For Railway, you can use `${{RAILWAY_PROJECT_NAME}}-${{RAILWAY_ENVIRONMENT_NAME}}.railway`. |
 | `TS_STATE_DIR`       |   Yes    | -                                                                 | Persistent storage directory. Required to prevent duplicate Tailscale machines on restart. |
-| `TS_ENABLE_HTTPS`    |    No    | `false`                                                           | Enable HTTPS proxy with automatic TLS certificates.                                        |
+| `TS_ENABLE_HTTPS`    |    No    | `false`                                                           | Enable HTTPS for every mapping when `TS_HTTPS_SERVICES` is unset. Use only with HTTP backends. |
+| `TS_HTTPS_SERVICES`  |    No    | -                                                                 | Comma-separated service names to enable HTTPS. A nonempty list overrides `TS_ENABLE_HTTPS`. |
+| `MAX_CONNECTIONS`    |    No    | `256`                                                             | Maximum concurrent TCP forwards per service. Must be greater than zero. Excess connections are closed. |
 | `LOG_LEVEL`          |    No    | `info`                                                            | Log verbosity: `debug`, `info`, `warn`, or `error`.                                        |
 | `HEALTH_ADDR`        |    No    | -                                                                 | If set (e.g. `:8080`), serves `/healthz` and `/readyz` probes on this address.             |
 | `SERVICE_[n]`        |   Yes    | -                                                                 | Service mapping in format: `servicename:sourceport:targethost:targetport`                  |
+
+Required values must be nonempty. `TS_STATE_DIR` must point to an existing directory.
+Services can share a source port because each service has its own Tailscale node.
+Services selected for HTTPS must use a TCP source port other than 80 or 443, which the HTTP redirect and HTTPS proxy reserve.
 
 **Example Configuration (TCP Only):**
 
@@ -71,7 +75,7 @@ SERVICE_03=api:80:${{WebServer.RAILWAY_PRIVATE_DOMAIN}}:${{WebServer.PORT}}
 TS_AUTHKEY=tskey-auth-xxxxx
 TS_HOSTNAME=my-project-production.railway
 TS_STATE_DIR=/app/data
-TS_ENABLE_HTTPS=true
+TS_HTTPS_SERVICES=bullboard,api
 SERVICE_01=bullboard:3000:${{Bullboard.RAILWAY_PRIVATE_DOMAIN}}:${{Bullboard.PORT}}
 SERVICE_02=api:8080:${{API.RAILWAY_PRIVATE_DOMAIN}}:${{API.PORT}}
 ```
@@ -106,7 +110,7 @@ Connect with: `redis://default:<password>@redis-my-project-production-railway:63
 #### Web Service (HTTPS Enabled)
 
 ```bash
-TS_ENABLE_HTTPS=true
+TS_HTTPS_SERVICES=bullboard
 TS_STATE_DIR=/app/data
 SERVICE_01=bullboard:3000:${{Bullboard.RAILWAY_PRIVATE_DOMAIN}}:${{Bullboard.PORT}}
 ```
@@ -119,7 +123,7 @@ Access via:
 #### API Service (HTTPS Enabled)
 
 ```bash
-TS_ENABLE_HTTPS=true
+TS_HTTPS_SERVICES=api
 TS_STATE_DIR=/app/data
 SERVICE_02=api:8080:${{API.RAILWAY_PRIVATE_DOMAIN}}:${{API.PORT}}
 ```
@@ -130,7 +134,7 @@ Access via: `https://api-my-project-production-railway.{your-tailnet}.ts.net/`
 
 ```bash
 # Enable HTTPS for web services
-TS_ENABLE_HTTPS=true
+TS_HTTPS_SERVICES=api,dashboard
 TS_STATE_DIR=/app/data
 
 # Mix of TCP and HTTPS-capable services
@@ -147,9 +151,8 @@ SERVICE_04=dashboard:3000:${{Dashboard.RAILWAY_PRIVATE_DOMAIN}}:${{Dashboard.POR
 - **API** (HTTPS): `https://api-my-project-production-railway.{your-tailnet}.ts.net/`
 - **Dashboard** (HTTPS): `https://dashboard-my-project-production-railway.{your-tailnet}.ts.net/`
 
-**Note**: When HTTPS is enabled, web services get both TCP and HTTPS access, while database services remain TCP-only.
-
-Each service gets its own clear, descriptive hostname that immediately tells you what you're connecting to!
+In this example, `TS_HTTPS_SERVICES` selects only `api` and `dashboard`. PostgreSQL and Redis remain TCP-only.
+The application does not detect whether a backend supports HTTP.
 
 ## HTTPS with Automatic TLS Certificates
 
@@ -167,13 +170,19 @@ Enable HTTPS proxy mode to automatically provision TLS certificates for your ser
 
 - **Persistent storage**: Set `TS_STATE_DIR` to a Railway volume mount path (e.g., `/app/data`)
 - **Railway volume**: Mount a volume to persist Tailscale state, machine identity, and certificates
+- **Tailnet DNS settings**: Enable MagicDNS and HTTPS certificates in the Tailscale admin console.
+- **Certificate hostname**: Use the full `<machine>.<tailnet>.ts.net` hostname. The short hostname does not match the certificate.
+
+Tailscale publishes certificate hostnames in public Certificate Transparency logs. Avoid sensitive information in service names and `TS_HOSTNAME`.
+The proxy sends the node's full certificate hostname in the upstream `Host` and `X-Forwarded-Host` headers.
+If your backend validates allowed hostnames, include that hostname in its configuration.
 
 ### Configuration
 
 ```bash
 # Enable HTTPS with persistent storage
 TS_STATE_DIR=/app/data          # Railway volume mount path
-TS_ENABLE_HTTPS=true            # Enable HTTPS proxy
+TS_HTTPS_SERVICES=service-name  # Select HTTP backends by service name
 
 # Service will be available at both:
 # - TCP: service-name.tailnet.ts.net:3000
@@ -184,7 +193,14 @@ TS_ENABLE_HTTPS=true            # Enable HTTPS proxy
 
 1. **Add volume** to your Railway service (e.g., mount at `/app/data`)
 2. **Set `TS_STATE_DIR=/app/data`** in your environment variables
-3. **Enable HTTPS** with `TS_ENABLE_HTTPS=true`
+3. **Select HTTPS services** with `TS_HTTPS_SERVICES=api,dashboard`.
+
+### Container user and volume permissions
+
+The container runs as root to write Tailscale state to Railway volumes, which are mounted as root.
+Changing the image to a nonroot user can prevent startup when the state volume is not writable.
+For nonroot images with this issue, Railway documents the service variable `RAILWAY_RUN_UID=0`.
+For more information, see [Railway volume permissions](https://docs.railway.com/volumes#permissions).
 
 ### Certificate Storage
 
@@ -208,3 +224,31 @@ Authorization to reach a service is enforced entirely by your tailnet ACLs again
 
 **Note**: You must be listed as a "TagOwner" in your Tailscale ACL to apply tags. See [Tailscale ACL documentation](https://tailscale.com/kb/1337/acl-syntax) for more details.
 
+## Health and shutdown
+
+Set `HEALTH_ADDR=:8080` to expose `/healthz` and `/readyz` on the container network.
+Keep this port private or use a loopback address when external probes are unnecessary.
+`/readyz` returns 200 after every service binds its listeners and returns 503 during shutdown.
+Readiness does not test backend availability. Failed HTTPS upstream requests return 502.
+
+On SIGINT or SIGTERM, the forwarder stops accepting TCP connections and gives existing connections up to 30 seconds to finish.
+After that deadline, it closes the remaining connections. Configure the deployment platform's shutdown window to allow this drain period.
+TCP half-closes preserve responses until both directions finish or shutdown forces closure.
+
+## Development and release checks
+
+Use Go 1.27.2 or later. The Go version and dependencies are declared in `go.mod`.
+
+```bash
+go test -race -count=1 -cover ./...
+go vet ./...
+go run honnef.co/go/tools/cmd/staticcheck@v0.8.2 ./...
+go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
+go mod tidy -diff
+docker build -t tailscale-forwarder .
+```
+
+CI runs these checks for pull requests, pushes to `main`, and a weekly schedule.
+Release publishing depends on CI passing and includes build provenance and an SBOM.
+Dependabot proposes updates for Go modules, GitHub Actions, and Docker base images.
+The container includes dependency license notices in `/usr/share/doc/tailscale-forwarder/THIRD_PARTY_NOTICES.txt`.

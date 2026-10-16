@@ -7,7 +7,7 @@ import (
 
 	"github.com/alandotcom/tailscale-forwarder/internal/util"
 
-	"github.com/caarlos0/env/v10"
+	"github.com/caarlos0/env/v11"
 )
 
 // Load reads configuration from environment variables, validates it, and
@@ -34,6 +34,12 @@ func Load() (*Config, error) {
 		errs = append(errs, errors.New(`required environment variable "SERVICE_[n]" is not set`))
 	}
 	cfg.ServiceMappings = mappings
+	if cfg.MaxConnections < 1 {
+		errs = append(errs, errors.New("MAX_CONNECTIONS must be greater than zero"))
+	}
+	if err := selectHTTPSServices(cfg); err != nil {
+		errs = append(errs, err)
+	}
 
 	sanitizedHostname := util.SanitizeHostname(cfg.TSHostname)
 	if sanitizedHostname == "" {
@@ -44,10 +50,12 @@ func Load() (*Config, error) {
 	// Require TS_STATE_DIR (env.Parse already enforces presence; this adds an
 	// existence check so a misconfigured path fails at startup, not mid-run).
 	if cfg.TSStateDir != "" {
-		if _, err := os.Stat(cfg.TSStateDir); os.IsNotExist(err) {
+		if info, err := os.Stat(cfg.TSStateDir); os.IsNotExist(err) {
 			errs = append(errs, fmt.Errorf("TS_STATE_DIR directory does not exist: %s", cfg.TSStateDir))
 		} else if err != nil {
 			errs = append(errs, fmt.Errorf("TS_STATE_DIR directory error: %w", err))
+		} else if !info.IsDir() {
+			errs = append(errs, fmt.Errorf("TS_STATE_DIR is not a directory: %s", cfg.TSStateDir))
 		}
 	}
 

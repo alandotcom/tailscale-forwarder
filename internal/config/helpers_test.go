@@ -76,13 +76,13 @@ func TestParseServiceMappings(t *testing.T) {
 		}
 	})
 
-	t.Run("duplicate source port is rejected", func(t *testing.T) {
+	t.Run("separate nodes can share a source port", func(t *testing.T) {
 		environ := []string{
 			"SERVICE_01=postgres:5432:db.internal:5432",
 			"SERVICE_02=other:5432:other.internal:5432",
 		}
-		if _, err := parseServiceMappings(environ, "SERVICE_"); err == nil {
-			t.Fatal("expected duplicate source port error, got nil")
+		if got, err := parseServiceMappings(environ, "SERVICE_"); err != nil || len(got) != 2 {
+			t.Fatalf("got %v, %v; want two mappings", got, err)
 		}
 	})
 

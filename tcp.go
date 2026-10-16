@@ -11,34 +11,54 @@ import (
 	"time"
 )
 
-// fwdTCP dials the target and copies bytes in both directions between the
-// source and target connections. It returns as soon as either copy direction
-// finishes (a normal peer close, an error) or ctx is cancelled, then closes
-// both connections so the surviving copy goroutine unblocks and exits. This
-// keeps the number of live goroutines bounded by the number of *concurrent*
-// connections rather than the total ever served.
+// fwdTCP preserves half-closes until both copy directions finish. Cancellation
+// or a copy error closes both connections and waits for the copies to stop.
 func fwdTCP(ctx context.Context, sourceConn net.Conn, targetAddr string, targetPort int) error {
+	defer sourceConn.Close()
 	dialer := &net.Dialer{Timeout: 30 * time.Second}
 	targetConn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(targetAddr, strconv.Itoa(targetPort)))
 	if err != nil {
 		return fmt.Errorf("failed to dial target (%s): %w", dialErrorReason(err), err)
 	}
+	defer targetConn.Close()
 
-	// Buffered so both goroutines can always send their result and exit, even
-	// if we have already stopped reading from the channel.
 	done := make(chan error, 2)
-	go func() { _, err := io.Copy(targetConn, sourceConn); done <- err }()
-	go func() { _, err := io.Copy(sourceConn, targetConn); done <- err }()
+	copyConn := func(dst, src net.Conn) {
+		_, err := io.Copy(dst, src)
+		if err == nil {
+			if writer, ok := dst.(interface{ CloseWrite() error }); ok {
+				err = writer.CloseWrite()
+			} else {
+				err = dst.Close()
+			}
+		}
+		done <- err
+	}
+	go copyConn(targetConn, sourceConn)
+	go copyConn(sourceConn, targetConn)
 
 	var copyErr error
-	select {
-	case <-ctx.Done():
-	case copyErr = <-done:
+	remaining := 2
+copying:
+	for remaining > 0 {
+		select {
+		case <-ctx.Done():
+			break copying
+		case err := <-done:
+			remaining--
+			if err != nil {
+				copyErr = err
+				break copying
+			}
+		}
 	}
 
-	// Closing both ends unblocks the still-running copy direction.
 	sourceConn.Close()
 	targetConn.Close()
+	for remaining > 0 {
+		<-done
+		remaining--
+	}
 
 	if copyErr != nil && !errors.Is(copyErr, io.EOF) && !errors.Is(copyErr, net.ErrClosed) {
 		return copyErr

@@ -3,45 +3,56 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
-	"sync/atomic"
+	"sync"
 	"time"
 
 	"github.com/alandotcom/tailscale-forwarder/internal/logger"
 )
 
-// readiness tracks how many service mappings have bound their listeners. It is
-// reported by the /readyz endpoint so an orchestrator can gate traffic until
-// every service is actually serving.
+// readiness tracks bound services and their serving contexts. A failed service
+// becomes unready as soon as its context is cancelled, before connections drain.
 type readiness struct {
-	total int64
-	ready atomic.Int64
+	total    int
+	mu       sync.RWMutex
+	services []context.Context
 }
 
 func newReadiness(total int) *readiness {
-	return &readiness{total: int64(total)}
+	return &readiness{total: total}
 }
 
-func (r *readiness) markReady() {
-	r.ready.Add(1)
+func (r *readiness) markReady(ctx context.Context) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.services = append(r.services, ctx)
 }
 
 func (r *readiness) isReady() bool {
-	return r.ready.Load() >= r.total
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if len(r.services) != r.total {
+		return false
+	}
+	for _, ctx := range r.services {
+		if ctx.Err() != nil {
+			return false
+		}
+	}
+	return true
 }
 
-// serveHealth runs a plain (non-tsnet) HTTP server exposing liveness and
-// readiness probes on addr. It is only started when HEALTH_ADDR is configured,
-// and shuts down when ctx is cancelled.
-func serveHealth(ctx context.Context, addr string, r *readiness) {
+func healthHandler(ctx context.Context, r *readiness) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte("ok"))
 	})
 	mux.HandleFunc("/readyz", func(w http.ResponseWriter, _ *http.Request) {
-		if r.isReady() {
+		if ctx.Err() == nil && r.isReady() {
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte("ready"))
 			return
@@ -49,25 +60,41 @@ func serveHealth(ctx context.Context, addr string, r *readiness) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		_, _ = w.Write([]byte("not ready"))
 	})
+	return mux
+}
 
+func serveHealth(ctx context.Context, listener net.Listener, r *readiness) error {
 	srv := &http.Server{
-		Addr:              addr,
-		Handler:           mux,
+		Handler:           healthHandler(ctx, r),
 		ReadTimeout:       10 * time.Second,
 		ReadHeaderTimeout: 5 * time.Second,
 		WriteTimeout:      10 * time.Second,
 		IdleTimeout:       60 * time.Second,
 	}
+	defer srv.Close()
 
+	servingDone := make(chan struct{})
+	shutdownDone := make(chan struct{})
 	go func() {
-		<-ctx.Done()
+		defer close(shutdownDone)
+		select {
+		case <-ctx.Done():
+		case <-servingDone:
+			return
+		}
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		_ = srv.Shutdown(shutdownCtx)
+		if err := srv.Shutdown(shutdownCtx); err != nil {
+			srv.Close()
+		}
 	}()
 
-	logger.Stdout.Info("starting health server", slog.String("addr", addr))
-	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		logger.Stderr.Error("health server failed", slog.String("addr", addr), logger.ErrAttr(err))
+	logger.Stdout.Info("starting health server", slog.String("addr", listener.Addr().String()))
+	err := srv.Serve(listener)
+	close(servingDone)
+	<-shutdownDone
+	if err != nil && !errors.Is(err, http.ErrServerClosed) {
+		return fmt.Errorf("health server failed: %w", err)
 	}
+	return nil
 }

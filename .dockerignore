@@ -1,0 +1,13 @@
+.git
+.github
+.claude
+.opencode
+**/.env*
+data
+**/tailscaled.state
+**/*.key
+**/*.pem
+tailscale_fwdr
+tailscale-forwarder
+*.test
+coverage.*
