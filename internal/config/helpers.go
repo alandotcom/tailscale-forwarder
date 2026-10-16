@@ -10,13 +10,10 @@ import (
 
 // parseServiceMappings parses SERVICE_[n] entries from a list of "KEY=VALUE"
 // environment strings (as returned by os.Environ). Entries whose key does not
-// start with prefix are ignored. Duplicate service names (compared after
-// sanitization, since that is what becomes the Tailscale hostname) and
-// duplicate source ports are rejected.
+// start with prefix are ignored. Duplicate sanitized service names are rejected.
 func parseServiceMappings(environ []string, prefix string) ([]ServiceMapping, error) {
 	serviceMappings := []ServiceMapping{}
 	seenNames := map[string]struct{}{}
-	seenPorts := map[int]struct{}{}
 
 	for _, envVar := range environ {
 		kv := strings.SplitN(envVar, "=", 2)
@@ -36,16 +33,44 @@ func parseServiceMappings(environ []string, prefix string) ([]ServiceMapping, er
 		if _, dup := seenNames[sanitizedName]; dup {
 			return nil, fmt.Errorf("duplicate service name %q found in service mappings (names must be unique after sanitization)", mapping.Name)
 		}
-		if _, dup := seenPorts[mapping.SourcePort]; dup {
-			return nil, fmt.Errorf("duplicate source port %d found in service mappings", mapping.SourcePort)
-		}
 		seenNames[sanitizedName] = struct{}{}
-		seenPorts[mapping.SourcePort] = struct{}{}
 
 		serviceMappings = append(serviceMappings, mapping)
 	}
 
 	return serviceMappings, nil
+}
+
+func selectHTTPSServices(cfg *Config) error {
+	selected := make(map[string]bool, len(cfg.TSHTTPSServices))
+	for _, name := range cfg.TSHTTPSServices {
+		name = util.SanitizeHostname(strings.TrimSpace(name))
+		if name == "" {
+			return fmt.Errorf("TS_HTTPS_SERVICES contains an empty or invalid service name")
+		}
+		if _, exists := selected[name]; exists {
+			return fmt.Errorf("TS_HTTPS_SERVICES contains duplicate service %q", name)
+		}
+		selected[name] = false
+	}
+	for i := range cfg.ServiceMappings {
+		mapping := &cfg.ServiceMappings[i]
+		name := util.SanitizeHostname(mapping.Name)
+		_, listed := selected[name]
+		mapping.HTTPS = listed || (len(selected) == 0 && cfg.TSEnableHTTPS)
+		if listed {
+			selected[name] = true
+		}
+		if mapping.HTTPS && (mapping.SourcePort == 80 || mapping.SourcePort == 443) {
+			return fmt.Errorf("service %q: source port %d conflicts with HTTPS proxy ports 80 and 443", mapping.Name, mapping.SourcePort)
+		}
+	}
+	for name, found := range selected {
+		if !found {
+			return fmt.Errorf("TS_HTTPS_SERVICES references unknown service %q", name)
+		}
+	}
+	return nil
 }
 
 // parseServiceMapping parses and validates a single mapping value in the form

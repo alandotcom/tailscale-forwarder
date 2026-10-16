@@ -6,40 +6,55 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/alandotcom/tailscale-forwarder/internal/config"
 	"github.com/alandotcom/tailscale-forwarder/internal/logger"
 
 	"golang.org/x/sync/errgroup"
+	"tailscale.com/ipn/ipnstate"
 	"tailscale.com/tsnet"
 )
 
-// startHTTPSProxy registers an HTTP→HTTPS redirect server and an HTTPS reverse
-// proxy (with tsnet-provisioned certificates) on the provided errgroup. By
-// sharing the caller's group, a server failure propagates up and tears the
-// service down rather than being silently logged in a detached goroutine.
-func startHTTPSProxy(g *errgroup.Group, ctx context.Context, ts *tsnet.Server, serviceMapping config.ServiceMapping) error {
-	targetURL, err := url.Parse(fmt.Sprintf("http://%s:%d", serviceMapping.TargetAddr, serviceMapping.TargetPort))
-	if err != nil {
-		return fmt.Errorf("failed to parse target URL: %w", err)
+func httpsHostname(status *ipnstate.Status) (string, error) {
+	if status == nil || status.CurrentTailnet == nil || !status.CurrentTailnet.MagicDNSEnabled || status.Self == nil {
+		return "", errors.New("HTTPS requires MagicDNS to be enabled in the tailnet")
+	}
+	hostname := strings.TrimSuffix(status.Self.DNSName, ".")
+	for _, domain := range status.CertDomains {
+		if hostname != "" && strings.TrimSuffix(domain, ".") == hostname {
+			return hostname, nil
+		}
+	}
+	return "", errors.New("HTTPS certificates must be enabled for this node in the tailnet DNS settings")
+}
+
+func newHTTPSProxy(serviceMapping config.ServiceMapping, hostname string) *httputil.ReverseProxy {
+	targetURL := &url.URL{
+		Scheme: "http",
+		Host:   net.JoinHostPort(serviceMapping.TargetAddr, strconv.Itoa(serviceMapping.TargetPort)),
 	}
 
-	proxy := httputil.NewSingleHostReverseProxy(targetURL)
-
-	// Strip client-supplied forwarding headers before the proxy appends its
-	// own, so a tailnet client cannot spoof its apparent origin to the backend.
-	baseDirector := proxy.Director
-	proxy.Director = func(r *http.Request) {
-		r.Header.Del("X-Forwarded-For")
-		r.Header.Del("X-Forwarded-Host")
-		r.Header.Del("X-Forwarded-Proto")
-		r.Header.Del("X-Real-Ip")
-		baseDirector(r)
-		r.Header.Set("X-Forwarded-Proto", "https")
+	proxy := &httputil.ReverseProxy{
+		Rewrite: func(r *httputil.ProxyRequest) {
+			r.SetURL(targetURL)
+			r.Out.Host = hostname
+			r.Out.Header.Del("X-Real-Ip")
+			r.SetXForwarded()
+			r.Out.Header.Set("X-Forwarded-Host", hostname)
+			r.Out.Header.Set("X-Forwarded-Proto", "https")
+		},
+		ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
+			logger.Stderr.Error("HTTPS upstream request failed",
+				slog.String("service", serviceMapping.Name), logger.ErrAttr(err))
+			http.Error(w, "upstream unavailable", http.StatusBadGateway)
+		},
 	}
 
 	proxy.ModifyResponse = func(resp *http.Response) error {
@@ -51,14 +66,22 @@ func startHTTPSProxy(g *errgroup.Group, ctx context.Context, ts *tsnet.Server, s
 		)
 		return nil
 	}
+	return proxy
+}
 
-	// Redirect to the node's own hostname rather than reflecting the inbound
-	// Host header, which removes the open-redirect ingredient.
-	httpHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		httpsURL := fmt.Sprintf("https://%s%s", ts.Hostname, r.URL.RequestURI())
-		http.Redirect(w, r, httpsURL, http.StatusMovedPermanently)
+func httpsRedirect(hostname string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		target := &url.URL{
+			Scheme: "https", Host: hostname,
+			Path: r.URL.Path, RawPath: r.URL.RawPath,
+			RawQuery: r.URL.RawQuery, ForceQuery: r.URL.ForceQuery,
+		}
+		http.Redirect(w, r, target.String(), http.StatusPermanentRedirect)
 	})
+}
 
+func startHTTPSProxy(g *errgroup.Group, ctx context.Context, ts *tsnet.Server, serviceMapping config.ServiceMapping, hostname string) error {
+	proxy := newHTTPSProxy(serviceMapping, hostname)
 	httpsHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		logger.Stdout.Info("HTTPS proxy request",
 			slog.String("service", serviceMapping.Name),
@@ -77,7 +100,7 @@ func startHTTPSProxy(g *errgroup.Group, ctx context.Context, ts *tsnet.Server, s
 		GetCertificate: localClient.GetCertificate,
 	}
 
-	httpServer := newHTTPServer(httpHandler, nil)
+	httpServer := newHTTPServer(httpsRedirect(hostname), nil)
 	httpsServer := newHTTPServer(httpsHandler, tlsConfig)
 
 	httpListener, err := ts.Listen("tcp", ":80")
@@ -106,7 +129,7 @@ func startHTTPSProxy(g *errgroup.Group, ctx context.Context, ts *tsnet.Server, s
 		logger.Stdout.Info("starting HTTPS proxy server",
 			slog.String("service", serviceMapping.Name),
 			slog.String("addr", httpsListener.Addr().String()),
-			slog.String("target", targetURL.String()),
+			slog.String("target", net.JoinHostPort(serviceMapping.TargetAddr, strconv.Itoa(serviceMapping.TargetPort))),
 		)
 		if err := httpsServer.ServeTLS(httpsListener, "", ""); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			return fmt.Errorf("HTTPS proxy server failed for %s: %w", serviceMapping.Name, err)
@@ -124,12 +147,14 @@ func startHTTPSProxy(g *errgroup.Group, ctx context.Context, ts *tsnet.Server, s
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownGrace)
 		defer cancel()
 		if err := httpServer.Shutdown(shutdownCtx); err != nil {
+			httpServer.Close()
 			logger.Stderr.Error("HTTP server shutdown failed",
 				slog.String("service", serviceMapping.Name),
 				logger.ErrAttr(err),
 			)
 		}
 		if err := httpsServer.Shutdown(shutdownCtx); err != nil {
+			httpsServer.Close()
 			logger.Stderr.Error("HTTPS server shutdown failed",
 				slog.String("service", serviceMapping.Name),
 				logger.ErrAttr(err),
@@ -143,8 +168,8 @@ func startHTTPSProxy(g *errgroup.Group, ctx context.Context, ts *tsnet.Server, s
 
 	logger.Stdout.Info("HTTPS proxy started",
 		slog.String("service", serviceMapping.Name),
-		slog.String("https_url", fmt.Sprintf("https://%s/", ts.Hostname)),
-		slog.String("target", targetURL.String()),
+		slog.String("https_url", fmt.Sprintf("https://%s/", hostname)),
+		slog.String("target", net.JoinHostPort(serviceMapping.TargetAddr, strconv.Itoa(serviceMapping.TargetPort))),
 	)
 
 	return nil
