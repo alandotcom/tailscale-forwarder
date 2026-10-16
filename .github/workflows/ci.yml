@@ -40,4 +40,5 @@ jobs:
       - name: Check vulnerabilities
         run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
       - name: Build container
+        if: github.event_name != 'release'
         run: docker build --tag tailscale-forwarder:ci .

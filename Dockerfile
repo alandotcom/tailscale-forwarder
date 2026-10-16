@@ -13,7 +13,7 @@ COPY . ./
 
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 go build -mod=readonly -trimpath -o tailscale_fwdr -ldflags="-w -s" . \
+    go build -mod=readonly -trimpath -o tailscale_fwdr -ldflags="-w -s" . \
     && sh scripts/third-party-notices.sh > THIRD_PARTY_NOTICES.txt
 
 FROM gcr.io/distroless/static-debian13:latest@sha256:58133991db06659feaabe0f4e97a35cebf15ef4ea08f8a4c6d2ee5f75e4aa6a0

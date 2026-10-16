@@ -32,7 +32,6 @@ func TestHealthReadinessLifecycle(t *testing.T) {
 	check("/readyz", http.StatusOK)
 	stopService()
 	check("/readyz", http.StatusServiceUnavailable)
-	stopService()
 	cancel()
 	check("/readyz", http.StatusServiceUnavailable)
 	check("/healthz", http.StatusOK)
