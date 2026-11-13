@@ -4,7 +4,7 @@ go 1.27.2
 
 require (
 	github.com/caarlos0/env/v11 v11.4.1
-	golang.org/x/sync v0.24.0
+	golang.org/x/sync v0.25.0
 	tailscale.com v1.104.1
 )
 
